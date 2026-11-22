@@ -87,12 +87,10 @@ jobs:
         export KBUILD_BUILD_HOST=Wuxin-Builds
         export KBUILD_BUILD_USER=$(echo ${{ github.actor }} | tr A-Z a-z)
 
-        # Apply manual non-GKI KSU hooks to kernel sources
         if [ "${{ env.APPLY_KSU_PATCH }}" = "true" ]; then
             bash $GITHUB_WORKSPACE/patches.sh
         fi
 
-        # Modify defconfig directly BEFORE generating .config
         if [ "${{ env.ENABLE_KERNELSU }}" = "true" ]; then
             if grep -q "CONFIG_KSU" arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}; then
                 sed -i 's/# CONFIG_KSU is not set/CONFIG_KSU=y/g' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
@@ -160,9 +158,9 @@ jobs:
         sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
         sed -i 's!block=/dev/block/by-name/boot;!block=auto;!g' AnyKernel3/anykernel.sh
         sed -i 's/is_slot_device=0;/is_slot_device=auto;/g' AnyKernel3/anykernel.sh
-        if [ ${{ env.CHECK_FILE_IS_OK }} = true ]; then
+        if [ "${{ env.CHECK_FILE_IS_OK }}" = "true" ]; then
             cp android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_FILE }} AnyKernel3/
-        elif [ ${{ env.CHECK_DTBO_IS_OK }} = true ]; then
+        elif [ "${{ env.CHECK_DTBO_IS_OK }}" = "true" ]; then
             cp android-kernel/out/arch/${{ env.ARCH }}/boot/dtbo.img AnyKernel3/
         fi
         rm -rf AnyKernel3/.git* AnyKernel3/README.md
