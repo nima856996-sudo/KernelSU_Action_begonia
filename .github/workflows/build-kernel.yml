@@ -100,6 +100,12 @@ jobs:
             fi
         fi
 
+        # Fix MediaTek TEEI driver missing pointer cast for modern Clang
+        if [ -f drivers/misc/mediatek/teei/300/tz_driver/teei_client_main.c ]; then
+            sed -i 's/memcpy(&versionlen, message_buff,/memcpy(\&versionlen, (void *)message_buff,/g' drivers/misc/mediatek/teei/300/tz_driver/teei_client_main.c
+            sed -i 's/memcpy(version, message_buff + 4,/memcpy(version, (void *)(message_buff + 4),/g' drivers/misc/mediatek/teei/300/tz_driver/teei_client_main.c
+        fi
+
         # Disable stack protector check for old 4.14 kernel
         sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/# CONFIG_CC_STACKPROTECTOR_STRONG is not set/g' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
         sed -i 's/CONFIG_CC_STACKPROTECTOR=y/# CONFIG_CC_STACKPROTECTOR is not set/g' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
@@ -135,7 +141,7 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            KCFLAGS="-w"
+            KCFLAGS="-w -Wno-int-conversion -Wno-incompatible-pointer-types"
 
     - name: Check a kernel output files
       run: |
