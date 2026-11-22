@@ -162,8 +162,11 @@ jobs:
         cd $GITHUB_WORKSPACE/kernel_workspace
         git clone https://github.com/osm0sis/AnyKernel3
         sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
-        sed -i 's!block=/dev/block/by-name/boot;!block=auto;!g' AnyKernel3/anykernel.sh
-        sed -i 's/is_slot_device=0;/is_slot_device=auto;/g' AnyKernel3/anykernel.sh
+        sed -i 's!BLOCK=.*;!block=boot;!g' AnyKernel3/anykernel.sh
+        sed -i 's/IS_SLOT_DEVICE=.*;/is_slot_device=0;/g' AnyKernel3/anykernel.sh
+        sed -i 's/device.name1=.*/device.name1=begonia/g' AnyKernel3/anykernel.sh
+        sed -i 's/device.name2=.*/device.name2=begoniain/g' AnyKernel3/anykernel.sh
+        sed -i '/backup_file/d; /replace_string/d; /insert_line/d; /append_file/d; /patch_fstab/d' AnyKernel3/anykernel.sh
         if [ "${{ env.CHECK_FILE_IS_OK }}" = "true" ]; then
             cp android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_FILE }} AnyKernel3/
         elif [ "${{ env.CHECK_DTBO_IS_OK }}" = "true" ]; then
