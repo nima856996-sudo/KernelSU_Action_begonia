@@ -75,6 +75,13 @@ jobs:
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         curl -LSs "https://raw.githubusercontent.com/SukiSU-Nova/SukiSU-Nova/main/kernel/setup.sh" | bash -
         sed -i 's/depends on KPROBES && EXT4_FS/depends on EXT4_FS/g' KernelSU/kernel/Kconfig
+        python3 -c "
+        with open('KernelSU/kernel/hook/syscall_hook.h', 'r') as f: s = f.read()
+        s = s.replace('#elif defined(__riscv)\ntypedef long (*syscall_fn_t)(const struct pt_regs *);\n#endif', '#elif defined(__riscv)\ntypedef long (*syscall_fn_t)(const struct pt_regs *);\n#else\ntypedef void *syscall_fn_t;\n#endif')
+        with open('KernelSU/kernel/hook/syscall_hook.h', 'w') as f: f.write(s)
+        with open('KernelSU/kernel/core/init.c', 'r') as f: lines = [l for l in f.readlines() if 'MODULE_IMPORT_NS' not in l]
+        with open('KernelSU/kernel/core/init.c', 'w') as f: f.writelines(lines)
+        "
         KSU_VERSION=$(cd KernelSU && expr $(/usr/bin/git rev-list --count HEAD 2>/dev/null || echo 100) + 10200)
         echo "UPLOADNAME=-SukiSU_$KSU_VERSION" >> $GITHUB_ENV
 
