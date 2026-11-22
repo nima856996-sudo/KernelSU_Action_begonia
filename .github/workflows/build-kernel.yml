@@ -76,11 +76,50 @@ jobs:
         curl -LSs "https://raw.githubusercontent.com/SukiSU-Nova/SukiSU-Nova/main/kernel/setup.sh" | bash -
         sed -i 's/depends on KPROBES && EXT4_FS/depends on EXT4_FS/g' KernelSU/kernel/Kconfig
         python3 -c "
+        import os
+        os.makedirs('include/linux', exist_ok=True)
+        if not os.path.exists('include/linux/pgtable.h'):
+            with open('include/linux/pgtable.h', 'w') as f:
+                f.write('#ifndef _LINUX_PGTABLE_H\n#define _LINUX_PGTABLE_H\n#include <asm/pgtable.h>\n#endif\n')
+
         with open('KernelSU/kernel/hook/syscall_hook.h', 'r') as f: s = f.read()
         s = s.replace('#elif defined(__riscv)\ntypedef long (*syscall_fn_t)(const struct pt_regs *);\n#endif', '#elif defined(__riscv)\ntypedef long (*syscall_fn_t)(const struct pt_regs *);\n#else\ntypedef void *syscall_fn_t;\n#endif')
         with open('KernelSU/kernel/hook/syscall_hook.h', 'w') as f: f.write(s)
+
         with open('KernelSU/kernel/core/init.c', 'r') as f: lines = [l for l in f.readlines() if 'MODULE_IMPORT_NS' not in l]
         with open('KernelSU/kernel/core/init.c', 'w') as f: f.writelines(lines)
+
+        compat_code = '''
+#include <linux/version.h>
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
+#include <asm/pgtable.h>
+#ifndef strncpy_from_user_nofault
+#define strncpy_from_user_nofault(dst, src, count) strncpy_from_user(dst, src, count)
+#endif
+#ifndef copy_from_user_nofault
+#define copy_from_user_nofault(dst, src, count) copy_from_user(dst, src, count)
+#endif
+#endif
+'''
+        with open('KernelSU/kernel/include/ksu.h', 'r') as f: ksu_content = f.read()
+        if 'strncpy_from_user_nofault' not in ksu_content:
+            ksu_content = ksu_content.replace('#ifndef __KSU_H_KSU\n#define __KSU_H_KSU', '#ifndef __KSU_H_KSU\n#define __KSU_H_KSU\n' + compat_code)
+            with open('KernelSU/kernel/include/ksu.h', 'w') as f: f.write(ksu_content)
+
+        if os.path.exists('KernelSU/kernel/kernel_compat.h'):
+            with open('KernelSU/kernel/kernel_compat.h', 'r') as f: kc = f.read()
+            if 'copy_from_user_nofault' not in kc:
+                kc = kc.replace('#define __KSU_H_KERNEL_COMPAT', '#define __KSU_H_KERNEL_COMPAT\n' + compat_code)
+                with open('KernelSU/kernel/kernel_compat.h', 'w') as f: f.write(kc)
+
+        for root, dirs, files in os.walk('KernelSU'):
+            for file in files:
+                if file.endswith(('.c', '.h')):
+                    fp = os.path.join(root, file)
+                    with open(fp, 'r', errors='ignore') as f: fc = f.read()
+                    if '<linux/pgtable.h>' in fc:
+                        fc = fc.replace('<linux/pgtable.h>', '<asm/pgtable.h>')
+                        with open(fp, 'w') as f: f.write(fc)
         "
         KSU_VERSION=$(cd KernelSU && expr $(/usr/bin/git rev-list --count HEAD 2>/dev/null || echo 100) + 10200)
         echo "UPLOADNAME=-SukiSU_$KSU_VERSION" >> $GITHUB_ENV
@@ -100,6 +139,7 @@ jobs:
         fi
 
         if [ "${{ env.ENABLE_KERNELSU }}" = "true" ]; then
+            sed -i 's/# CONFIG_KPROBES is not set/CONFIG_KPROBES=y\nCONFIG_KPROBE_EVENTS=y/g' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
             echo "CONFIG_KSU=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
             echo "CONFIG_KSU_MANUAL_SU=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
             echo "CONFIG_KPM=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
@@ -175,12 +215,48 @@ jobs:
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
         git clone https://github.com/osm0sis/AnyKernel3
-        sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
-        sed -i 's!BLOCK=.*;!BLOCK=boot; block=boot;!g' AnyKernel3/anykernel.sh
-        sed -i 's/IS_SLOT_DEVICE=.*;/IS_SLOT_DEVICE=0; is_slot_device=0;/g' AnyKernel3/anykernel.sh
-        sed -i 's/device.name1=.*/device.name1=begonia/g' AnyKernel3/anykernel.sh
-        sed -i 's/device.name2=.*/device.name2=begoniain/g' AnyKernel3/anykernel.sh
-        sed -i '/backup_file/d; /replace_string/d; /insert_line/d; /append_file/d; /patch_fstab/d' AnyKernel3/anykernel.sh
+        cat << 'EOF' > AnyKernel3/anykernel.sh
+### AnyKernel3 Ramdisk Mod Script
+## osm0sis @ xda-developers
+
+### AnyKernel setup
+# begin properties
+properties() { '
+kernel.string=QuantumKiller-N with SukiSU Nova
+do.devicecheck=0
+do.modules=0
+do.systemless=1
+do.cleanup=1
+do.cleanuponabort=0
+device.name1=begonia
+device.name2=begoniain
+supported.versions=
+supported.patchlevels=
+'; } # end properties
+
+### AnyKernel install
+# begin attributes
+boot_attributes() {
+set_perm_recursive 0 0 755 644 $RAMDISK/*;
+set_perm_recursive 0 0 750 750 $RAMDISK/init* $RAMDISK/sbin;
+} # end attributes
+
+## boot shell variables
+BLOCK=boot;
+IS_SLOT_DEVICE=0;
+RAMDISK_COMPRESSION=auto;
+PATCH_VBMETA_FLAG=auto;
+
+# import functions/variables and setup patching - see for reference (DO NOT REMOVE)
+. tools/ak3-core.sh;
+
+# boot install
+dump_boot;
+
+# write boot
+write_boot;
+## end boot install
+EOF
         if [ "${{ env.CHECK_FILE_IS_OK }}" = "true" ]; then
             cp android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_FILE }} AnyKernel3/
         elif [ "${{ env.CHECK_DTBO_IS_OK }}" = "true" ]; then
