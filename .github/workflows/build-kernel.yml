@@ -69,7 +69,7 @@ jobs:
             echo "Source boot image is empty"
         fi
   
-        - name: Setup SukiSU Nova
+    - name: Setup SukiSU Nova
       if: env.ENABLE_KERNELSU == 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
