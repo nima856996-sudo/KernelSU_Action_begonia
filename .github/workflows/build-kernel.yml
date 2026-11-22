@@ -74,6 +74,7 @@ jobs:
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         curl -LSs "https://raw.githubusercontent.com/SukiSU-Nova/SukiSU-Nova/main/kernel/setup.sh" | bash -
+        sed -i 's/depends on KPROBES && EXT4_FS/depends on EXT4_FS/g' KernelSU/kernel/Kconfig
         KSU_VERSION=$(cd KernelSU && expr $(/usr/bin/git rev-list --count HEAD 2>/dev/null || echo 100) + 10200)
         echo "UPLOADNAME=-SukiSU_$KSU_VERSION" >> $GITHUB_ENV
 
@@ -92,12 +93,13 @@ jobs:
         fi
 
         if [ "${{ env.ENABLE_KERNELSU }}" = "true" ]; then
-            if grep -q "CONFIG_KSU" arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}; then
-                sed -i 's/# CONFIG_KSU is not set/CONFIG_KSU=y/g' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-                sed -i 's/CONFIG_KSU=n/CONFIG_KSU=y/g' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            else
-                echo "CONFIG_KSU=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            fi
+            echo "CONFIG_KSU=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
+            echo "CONFIG_KSU_MANUAL_SU=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
+            echo "CONFIG_KPM=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
+            echo "CONFIG_MODULES=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
+            echo "CONFIG_KPROBES=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
+            echo "CONFIG_HAVE_KPROBES=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
+            echo "CONFIG_KPROBE_EVENTS=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
         fi
 
         # Fix MediaTek TEEI driver missing pointer cast for modern Clang
@@ -125,6 +127,11 @@ jobs:
         fi
 
         make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- ${{ env.KERNEL_CONFIG }}
+        if ! grep -q "CONFIG_KSU=y" out/.config; then
+            echo "CONFIG_KSU=y" >> out/.config
+            echo "CONFIG_KSU_MANUAL_SU=y" >> out/.config
+            echo "CONFIG_KPM=y" >> out/.config
+        fi
 
     - name: Build kernel
       run: |
@@ -162,8 +169,8 @@ jobs:
         cd $GITHUB_WORKSPACE/kernel_workspace
         git clone https://github.com/osm0sis/AnyKernel3
         sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
-        sed -i 's!BLOCK=.*;!block=boot;!g' AnyKernel3/anykernel.sh
-        sed -i 's/IS_SLOT_DEVICE=.*;/is_slot_device=0;/g' AnyKernel3/anykernel.sh
+        sed -i 's!BLOCK=.*;!BLOCK=boot; block=boot;!g' AnyKernel3/anykernel.sh
+        sed -i 's/IS_SLOT_DEVICE=.*;/IS_SLOT_DEVICE=0; is_slot_device=0;/g' AnyKernel3/anykernel.sh
         sed -i 's/device.name1=.*/device.name1=begonia/g' AnyKernel3/anykernel.sh
         sed -i 's/device.name2=.*/device.name2=begoniain/g' AnyKernel3/anykernel.sh
         sed -i '/backup_file/d; /replace_string/d; /insert_line/d; /append_file/d; /patch_fstab/d' AnyKernel3/anykernel.sh
