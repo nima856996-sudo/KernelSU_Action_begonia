@@ -310,22 +310,60 @@ void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr) {}
                 f.write(sh)
             print("[+] Patched syscall_hook.c for sys_ni_syscall fallback")
 
-    # 14. Patch util.h for Linux 4.14 syscall prefix
+    # 14. Patch util.h for Linux 4.14 ksyscall and ksu_close_fd
     util_h = os.path.join(ksu_dir, 'kernel', 'include', 'util.h')
     if os.path.exists(util_h):
         with open(util_h, 'r', encoding='utf-8') as f:
             uh = f.read()
-        target_uh = '#define KSU_SYS_PREFIX(name) __arm64_sys_##name'
-        repl_uh = '''#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
-#define KSU_SYS_PREFIX(name) __arm64_sys_##name
+
+        target_ksyscall = """#define __ksyscall(name, a, b, c, d, e, f)                                                                             \\
+    ({                                                                                                                 \\
+        extern long KSU_SYS_PREFIX(name)(const struct pt_regs *);                                                      \\
+        struct pt_regs __ksu_regs = { 0 };                                                                             \\
+        PT_REGS_SYSCALL_PARM1(&__ksu_regs) = (unsigned long)(a);                                                       \\
+        PT_REGS_PARM2(&__ksu_regs) = (unsigned long)(b);                                                               \\
+        PT_REGS_PARM3(&__ksu_regs) = (unsigned long)(c);                                                               \\
+        PT_REGS_SYSCALL_PARM4(&__ksu_regs) = (unsigned long)(d);                                                       \\
+        PT_REGS_PARM5(&__ksu_regs) = (unsigned long)(e);                                                               \\
+        PT_REGS_PARM6(&__ksu_regs) = (unsigned long)(f);                                                               \\
+        (long)KSU_SYS_PREFIX(name)(&__ksu_regs);                                                                       \\
+    })
+
+// https://elixir.bootlin.com/musl/v1.2.6/source/src/internal/syscall.h#L45
+#define ksyscall_0(name) __ksyscall(name, 0, 0, 0, 0, 0, 0)
+#define ksyscall_1(name, a) __ksyscall(name, a, 0, 0, 0, 0, 0)
+#define ksyscall_2(name, a, b) __ksyscall(name, a, b, 0, 0, 0, 0)
+#define ksyscall_3(name, a, b, c) __ksyscall(name, a, b, c, 0, 0, 0)
+#define ksyscall_4(name, a, b, c, d) __ksyscall(name, a, b, c, d, 0, 0)
+#define ksyscall_5(name, a, b, c, d, e) __ksyscall(name, a, b, c, d, e, 0)
+#define ksyscall_6(name, a, b, c, d, e, f) __ksyscall(name, a, b, c, d, e, f)
+
+#define __ksyscall_arg_n(_1, _2, _3, _4, _5, _6, _7, N, ...) N
+#define __ksyscall_count_args(...) __ksyscall_arg_n(__VA_ARGS__, 6, 5, 4, 3, 2, 1, 0)
+#define __ksyscall_concat(a, b) a##b
+#define __ksyscall_exp(func, arg) __ksyscall_concat(func, arg)
+#define ksyscall(...) __ksyscall_exp(ksyscall_, __ksyscall_count_args(__VA_ARGS__))(__VA_ARGS__)"""
+
+        if target_ksyscall in uh:
+            repl_ksyscall = """#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
+#include <linux/syscalls.h>
+#define ksyscall(name, ...) sys_##name(__VA_ARGS__)
 #else
-#define KSU_SYS_PREFIX(name) sys_##name
-#endif'''
-        if target_uh in uh:
-            uh = uh.replace(target_uh, repl_uh)
-            with open(util_h, 'w', encoding='utf-8') as f:
-                f.write(uh)
-            print("[+] Patched util.h for Linux 4.14 KSU_SYS_PREFIX")
+""" + target_ksyscall + "\n#endif"
+            uh = uh.replace(target_ksyscall, repl_ksyscall)
+
+        target_close = "#define ksu_close_fd(fd) ({ ksyscall(close, fd); })"
+        if target_close in uh:
+            repl_close = """#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
+#define ksu_close_fd(fd) sys_close((unsigned int)(fd))
+#else
+#define ksu_close_fd(fd) ({ ksyscall(close, fd); })
+#endif"""
+            uh = uh.replace(target_close, repl_close)
+
+        with open(util_h, 'w', encoding='utf-8') as f:
+            f.write(uh)
+        print("[+] Patched util.h for Linux 4.14 ksyscall and ksu_close_fd")
 
     # 15. Patch kpm.c for sys_truncate fallback
     kpm_c = os.path.join(ksu_dir, 'kernel', 'extension', 'kpm', 'kpm.c')
