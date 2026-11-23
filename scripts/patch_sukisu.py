@@ -33,17 +33,17 @@ def patch():
     if os.path.exists(hook_h):
         with open(hook_h, 'r', encoding='utf-8') as f:
             hcontent = f.read()
-        if 'typedef void *syscall_fn_t;' not in hcontent:
-            target = '#elif defined(__riscv)\ntypedef long (*syscall_fn_t)(const struct pt_regs *);\n#endif'
-            repl = '#elif defined(__riscv)\ntypedef long (*syscall_fn_t)(const struct pt_regs *);\n#else\ntypedef void *syscall_fn_t;\n#endif'
-            if target in hcontent:
-                hcontent = hcontent.replace(target, repl)
-            else:
-                # Add fallback before #endif
-                hcontent = hcontent.replace('#endif', '#ifndef syscall_fn_t\ntypedef void *syscall_fn_t;\n#endif\n#endif', 1)
-            with open(hook_h, 'w', encoding='utf-8') as f:
-                f.write(hcontent)
-            print("[+] Patched syscall_hook.h")
+        target = '#elif defined(__riscv)\ntypedef long (*syscall_fn_t)(const struct pt_regs *);\n#endif'
+        repl = '#elif defined(__riscv)\ntypedef long (*syscall_fn_t)(const struct pt_regs *);\n#else\ntypedef long (*syscall_fn_t)(const struct pt_regs *);\n#endif'
+        if target in hcontent:
+            hcontent = hcontent.replace(target, repl)
+        elif 'typedef void *syscall_fn_t;' in hcontent:
+            hcontent = hcontent.replace('typedef void *syscall_fn_t;', 'typedef long (*syscall_fn_t)(const struct pt_regs *);')
+        else:
+            hcontent = hcontent.replace('#endif', '#ifndef syscall_fn_t\ntypedef long (*syscall_fn_t)(const struct pt_regs *);\n#endif\n#endif', 1)
+        with open(hook_h, 'w', encoding='utf-8') as f:
+            f.write(hcontent)
+        print("[+] Patched syscall_hook.h with valid function pointer typedef")
 
     # 4. Strip MODULE_IMPORT_NS from init.c
     init_c = os.path.join(ksu_dir, 'kernel', 'core', 'init.c')
