@@ -57,6 +57,7 @@ jobs:
           echo "CONFIG_KPM=y" >> out/.config
           echo "CONFIG_KPROBES=y" >> out/.config
           echo "CONFIG_KPROBE_EVENTS=y" >> out/.config
+          echo "CONFIG_KRETPROBES=y" >> out/.config
           make -j$(nproc --all) O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- olddefconfig
 
       - name: Build Kernel
@@ -92,12 +93,18 @@ jobs:
           cp $GITHUB_WORKSPACE/scripts/anykernel_begonia.sh AnyKernel3/anykernel.sh
           cp android-kernel/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
           rm -rf AnyKernel3/.git* AnyKernel3/README.md
+          cd AnyKernel3
+          zip -r9 ../SukiSU-Nova-Kernel-Begonia-crDroid.zip . -x "*.git*"
+          cd ..
+          sha256sum SukiSU-Nova-Kernel-Begonia-crDroid.zip > SukiSU-Nova-Kernel-Begonia-crDroid.zip.sha256
 
       - name: Upload AnyKernel3 Package
         uses: actions/upload-artifact@v4
         with:
-          name: SukiSU-Nova-Kernel-begonia-${{ env.BUILD_TIME }}
-          path: kernel_workspace/AnyKernel3/*
+          name: SukiSU-Nova-Kernel-Begonia-crDroid-${{ env.BUILD_TIME }}
+          path: |
+            kernel_workspace/SukiSU-Nova-Kernel-Begonia-crDroid.zip
+            kernel_workspace/SukiSU-Nova-Kernel-Begonia-crDroid.zip.sha256
 
       - name: Upload Kernel Image
         uses: actions/upload-artifact@v4
