@@ -28,7 +28,7 @@ def patch():
             f.write(kc)
         print("[+] Patched Kconfig")
 
-    # 3. Patch syscall_hook.h for syscall_fn_t
+    # 3. Patch syscall_hook.h for syscall_fn_t function pointer typedef
     hook_h = os.path.join(ksu_dir, 'kernel', 'hook', 'syscall_hook.h')
     if os.path.exists(hook_h):
         with open(hook_h, 'r', encoding='utf-8') as f:
@@ -99,6 +99,37 @@ def patch():
                     content = content.replace('<linux/pgtable.h>', '<asm/pgtable.h>')
                     with open(fp, 'w', encoding='utf-8') as f:
                         f.write(content)
+
+    # 7. Patch lsm_hook.c for Linux 4.14 list_head compatibility
+    lsm_c = os.path.join(ksu_dir, 'kernel', 'hook', 'lsm_hook.c')
+    if os.path.exists(lsm_c):
+        with open(lsm_c, 'r', encoding='utf-8') as f:
+            lc = f.read()
+        
+        target1 = 'hook->list.head = head;\n                    hook->list.list.next = NULL;\n                    hook->list.list.pprev = &head->first;'
+        repl1 = '''hook->list.head = (void *)head;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
+                    hook->list.list.next = (struct list_head *)head;
+                    hook->list.list.prev = (struct list_head *)head;
+#else
+                    hook->list.list.next = NULL;
+                    hook->list.list.pprev = &head->first;
+#endif'''
+        if target1 in lc:
+            lc = lc.replace(target1, repl1)
+        
+        target2 = 'slot = (void **)&hook->list.head->first;'
+        repl2 = '''#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
+        slot = (void **)&hook->list.head->next;
+#else
+        slot = (void **)&hook->list.head->first;
+#endif'''
+        if target2 in lc:
+            lc = lc.replace(target2, repl2)
+            
+        with open(lsm_c, 'w', encoding='utf-8') as f:
+            f.write(lc)
+        print("[+] Patched lsm_hook.c for Linux 4.14 list_head")
 
     print("[+] All SukiSU 4.14 patches applied successfully!")
 
