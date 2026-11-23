@@ -132,65 +132,45 @@ typedef unsigned int __poll_t;
 #endif'''
         if target1 in lc:
             lc = lc.replace(target1, repl1)
-        
-        target2 = 'slot = (void **)&hook->list.head->first;'
-        repl2 = '''#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
-        slot = (void **)&hook->list.head->next;
+
+        target2 = 'hook->list.head = head;\n                hook->list.list.next = NULL;\n                hook->list.list.pprev = &head->first;'
+        repl2 = '''hook->list.head = (void *)head;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
+                hook->list.list.next = (struct list_head *)head;
+                hook->list.list.prev = (struct list_head *)head;
 #else
-        slot = (void **)&hook->list.head->first;
+                hook->list.list.next = NULL;
+                hook->list.list.pprev = &head->first;
 #endif'''
         if target2 in lc:
             lc = lc.replace(target2, repl2)
-            
+
+        target3 = 'list_del_rcu(&pos->list.list);'
+        repl3 = '''#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
+        list_del_rcu((struct list_head *)&pos->list.list);
+#else
+        list_del_rcu(&pos->list.list);
+#endif'''
+        if target3 in lc:
+            lc = lc.replace(target3, repl3)
+
         with open(lsm_c, 'w', encoding='utf-8') as f:
             f.write(lc)
-        print("[+] Patched lsm_hook.c for Linux 4.14 list_head")
+        print("[+] Patched lsm_hook.c for Linux 4.14 list_head compatibility")
 
-    # 9. Patch file_wrapper.c for Linux 4.14 file_operations compatibility
+    # 9. Patch file_wrapper.c for Linux 4.14 fops and types
     fw_c = os.path.join(ksu_dir, 'kernel', 'infra', 'file_wrapper.c')
     if os.path.exists(fw_c):
         with open(fw_c, 'r', encoding='utf-8') as f:
             fc = f.read()
+        
+        if '__poll_t' not in fc:
+            fc = '#include <uapi/linux/eventpoll.h>\n#ifndef __poll_t\ntypedef unsigned int __poll_t;\n#endif\n' + fc
 
-        if '#include <linux/poll.h>' not in fc:
-            fc = fc.replace('#include <linux/mount.h>', '#include <linux/mount.h>\n#include <linux/poll.h>\n#include <uapi/linux/eventpoll.h>\n#ifndef __poll_t\ntypedef unsigned int __poll_t;\n#endif')
-
-        iopoll_target = '''#else
-static int ksu_wrapper_iopoll(struct kiocb *kiocb, bool spin)
-{
-    struct ksu_file_wrapper *data = kiocb->ki_filp->private_data;
-    struct file *orig = data->orig;
-    kiocb->ki_filp = orig;
-    return orig->f_op->iopoll(kiocb, spin);
-}
-#endif'''
-        iopoll_repl = '''#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)
-static int ksu_wrapper_iopoll(struct kiocb *kiocb, bool spin)
-{
-    struct ksu_file_wrapper *data = kiocb->ki_filp->private_data;
-    struct file *orig = data->orig;
-    kiocb->ki_filp = orig;
-    return orig->f_op->iopoll(kiocb, spin);
-}
-#endif'''
-        if iopoll_target in fc:
-            fc = fc.replace(iopoll_target, iopoll_repl)
-
+        fc = fc.replace('unsigned int ksu_wrapper_iopoll(struct file *fp, struct io_comp_batch *b, unsigned int flags)',
+                        '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)\nunsigned int ksu_wrapper_iopoll(struct file *fp, struct io_comp_batch *b, unsigned int flags)')
         fc = fc.replace('p->ops.iopoll = fp->f_op->iopoll ? ksu_wrapper_iopoll : NULL;',
                         '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)\n    p->ops.iopoll = fp->f_op->iopoll ? ksu_wrapper_iopoll : NULL;\n#endif')
-
-        mmap_target = """#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
-    p->ops.fop_flags = fp->f_op->fop_flags;
-#else
-    p->ops.mmap_supported_flags = fp->f_op->mmap_supported_flags;
-#endif"""
-        mmap_repl = """#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
-    p->ops.fop_flags = fp->f_op->fop_flags;
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
-    p->ops.mmap_supported_flags = fp->f_op->mmap_supported_flags;
-#endif"""
-        if mmap_target in fc:
-            fc = fc.replace(mmap_target, mmap_repl)
 
         remap_target = '''static loff_t ksu_wrapper_remap_file_range(struct file *file_in, loff_t pos_in, struct file *file_out, loff_t pos_out,
                                            loff_t len, unsigned int remap_flags)
@@ -266,6 +246,102 @@ static int ksu_wrapper_fadvise(struct file *fp, loff_t off1, loff_t off2, int fl
             with open(eq_h, 'w', encoding='utf-8') as f:
                 f.write(eq)
             print("[+] Patched event_queue.h for __poll_t and eventpoll.h")
+
+    # 11. Patch seccomp_cache.c for Linux 4.14 (no seccomp bitmap cache in < 5.10)
+    sc_c = os.path.join(ksu_dir, 'kernel', 'infra', 'seccomp_cache.c')
+    if os.path.exists(sc_c):
+        with open(sc_c, 'r', encoding='utf-8') as f:
+            scc = f.read()
+        if 'SECCOMP_NO_OP_414' not in scc:
+            shim = '''#include <linux/version.h>
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)
+// SECCOMP_NO_OP_414
+#include <linux/fs.h>
+struct seccomp_filter;
+void ksu_seccomp_clear_cache(struct seccomp_filter *filter, int nr) {}
+void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr) {}
+#else
+'''
+            scc = shim + scc + '\n#endif\n'
+            with open(sc_c, 'w', encoding='utf-8') as f:
+                f.write(scc)
+            print("[+] Patched seccomp_cache.c for Linux 4.14")
+
+    # 12. Patch arch.h for Linux 4.14 arm64 syscall symbol names
+    arch_h = os.path.join(ksu_dir, 'kernel', 'include', 'arch.h')
+    if os.path.exists(arch_h):
+        with open(arch_h, 'r', encoding='utf-8') as f:
+            ah = f.read()
+        target_arch = """#define REBOOT_SYMBOL "__arm64_sys_reboot"
+#define SYS_READ_SYMBOL "__arm64_sys_read"
+#define SYS_EXECVE_SYMBOL "__arm64_sys_execve"
+// https://cs.android.com/android/kernel/superproject/+/common-android-mainline:common/scripts/syscalltbl.sh;l=57;drc=9142be9e6443fd641ca37f820efe00d9cd890eb1
+// https://cs.android.com/android/kernel/superproject/+/common-android-mainline:common/scripts/syscall.tbl;l=104;drc=b36d4b6aa88ef039647228b98c59a875e92f8c8e
+#define SYS_FSTAT_SYMBOL "__arm64_sys_newfstat\""""
+        repl_arch = """#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
+#define REBOOT_SYMBOL "__arm64_sys_reboot"
+#define SYS_READ_SYMBOL "__arm64_sys_read"
+#define SYS_EXECVE_SYMBOL "__arm64_sys_execve"
+#define SYS_FSTAT_SYMBOL "__arm64_sys_newfstat"
+#else
+#define REBOOT_SYMBOL "sys_reboot"
+#define SYS_READ_SYMBOL "sys_read"
+#define SYS_EXECVE_SYMBOL "sys_execve"
+#define SYS_FSTAT_SYMBOL "sys_newfstat"
+#endif"""
+        if target_arch in ah:
+            ah = ah.replace(target_arch, repl_arch)
+            with open(arch_h, 'w', encoding='utf-8') as f:
+                f.write(ah)
+            print("[+] Patched arch.h for Linux 4.14 syscall symbols")
+
+    # 13. Patch syscall_hook.c for sys_ni_syscall fallback
+    sh_c = os.path.join(ksu_dir, 'kernel', 'hook', 'arm64', 'syscall_hook.c')
+    if os.path.exists(sh_c):
+        with open(sh_c, 'r', encoding='utf-8') as f:
+            sh = f.read()
+        target_sh = 'ni_syscall = (unsigned long)ksu_resolve_symbol_for_functable_hook("__arm64_sys_ni_syscall");'
+        repl_sh = '''ni_syscall = (unsigned long)ksu_resolve_symbol_for_functable_hook("__arm64_sys_ni_syscall");
+    if (!ni_syscall)
+        ni_syscall = (unsigned long)ksu_resolve_symbol_for_functable_hook("sys_ni_syscall");'''
+        if target_sh in sh:
+            sh = sh.replace(target_sh, repl_sh)
+            with open(sh_c, 'w', encoding='utf-8') as f:
+                f.write(sh)
+            print("[+] Patched syscall_hook.c for sys_ni_syscall fallback")
+
+    # 14. Patch util.h for Linux 4.14 syscall prefix
+    util_h = os.path.join(ksu_dir, 'kernel', 'include', 'util.h')
+    if os.path.exists(util_h):
+        with open(util_h, 'r', encoding='utf-8') as f:
+            uh = f.read()
+        target_uh = '#define KSU_SYS_PREFIX(name) __arm64_sys_##name'
+        repl_uh = '''#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
+#define KSU_SYS_PREFIX(name) __arm64_sys_##name
+#else
+#define KSU_SYS_PREFIX(name) sys_##name
+#endif'''
+        if target_uh in uh:
+            uh = uh.replace(target_uh, repl_uh)
+            with open(util_h, 'w', encoding='utf-8') as f:
+                f.write(uh)
+            print("[+] Patched util.h for Linux 4.14 KSU_SYS_PREFIX")
+
+    # 15. Patch kpm.c for sys_truncate fallback
+    kpm_c = os.path.join(ksu_dir, 'kernel', 'extension', 'kpm', 'kpm.c')
+    if os.path.exists(kpm_c):
+        with open(kpm_c, 'r', encoding='utf-8') as f:
+            kc = f.read()
+        target_kc = 'if (!fn) fn = (handler_t)find_kernel_symbol_exact("__arm64_sys_truncate.cfi");'
+        repl_kc = '''if (!fn) fn = (handler_t)find_kernel_symbol_exact("__arm64_sys_truncate.cfi");
+        if (!fn) fn = (handler_t)find_kernel_symbol_exact("sys_truncate");
+        if (!fn) fn = (handler_t)find_kernel_symbol_exact("sys_truncate.cfi_jt");
+        if (!fn) fn = (handler_t)find_kernel_symbol_exact("sys_truncate.cfi");'''
+        if target_kc in kc:
+            kc = kc.replace(target_kc, repl_kc)
+            with open(kpm_c, 'w', encoding='utf-8') as f:
+                f.write(kc)
+            print("[+] Patched kpm.c for sys_truncate fallback")
 
     print("[+] All SukiSU 4.14 patches applied successfully!")
 
