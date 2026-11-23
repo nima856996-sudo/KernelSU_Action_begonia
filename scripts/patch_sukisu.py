@@ -13,12 +13,23 @@ def patch():
         f.write('#ifndef _LINUX_PGTABLE_H\n#define _LINUX_PGTABLE_H\n#include <asm/pgtable.h>\n#endif\n')
     print("[+] Created include/linux/pgtable.h shim")
 
+    # 2. Patch kernel include/linux/poll.h for __poll_t and EPOLL definitions
+    poll_h = os.path.join(kernel_dir, 'include', 'linux', 'poll.h')
+    if os.path.exists(poll_h):
+        with open(poll_h, 'r', encoding='utf-8') as f:
+            ph = f.read()
+        if '__poll_t' not in ph:
+            ph = ph.replace('#include <uapi/linux/poll.h>', '#include <uapi/linux/poll.h>\n#include <uapi/linux/eventpoll.h>\n#ifndef __poll_t\ntypedef unsigned int __poll_t;\n#endif')
+            with open(poll_h, 'w', encoding='utf-8') as f:
+                f.write(ph)
+            print("[+] Added __poll_t and eventpoll.h to include/linux/poll.h")
+
     ksu_dir = os.path.join(kernel_dir, 'KernelSU')
     if not os.path.exists(ksu_dir):
         print(f"[-] KernelSU directory not found at {ksu_dir}")
         return
 
-    # 2. Patch Kconfig: remove mandatory KPROBES dependency if needed
+    # 3. Patch Kconfig: remove mandatory KPROBES dependency if needed
     kconfig_path = os.path.join(ksu_dir, 'kernel', 'Kconfig')
     if os.path.exists(kconfig_path):
         with open(kconfig_path, 'r', encoding='utf-8') as f:
@@ -28,7 +39,7 @@ def patch():
             f.write(kc)
         print("[+] Patched Kconfig")
 
-    # 3. Patch syscall_hook.h for syscall_fn_t function pointer typedef
+    # 4. Patch syscall_hook.h for syscall_fn_t function pointer typedef
     hook_h = os.path.join(ksu_dir, 'kernel', 'hook', 'syscall_hook.h')
     if os.path.exists(hook_h):
         with open(hook_h, 'r', encoding='utf-8') as f:
@@ -45,7 +56,7 @@ def patch():
             f.write(hcontent)
         print("[+] Patched syscall_hook.h with valid function pointer typedef")
 
-    # 4. Strip MODULE_IMPORT_NS from init.c
+    # 5. Strip MODULE_IMPORT_NS from init.c
     init_c = os.path.join(ksu_dir, 'kernel', 'core', 'init.c')
     if os.path.exists(init_c):
         with open(init_c, 'r', encoding='utf-8') as f:
@@ -55,11 +66,15 @@ def patch():
             f.writelines(clean_lines)
         print("[+] Stripped MODULE_IMPORT_NS from init.c")
 
-    # 5. Add compat code to ksu.h and kernel_compat.h
+    # 6. Add compat code to ksu.h and kernel_compat.h
     compat_code = """
 #include <linux/version.h>
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
 #include <asm/pgtable.h>
+#include <uapi/linux/eventpoll.h>
+#ifndef __poll_t
+typedef unsigned int __poll_t;
+#endif
 #ifndef strncpy_from_user_nofault
 #define strncpy_from_user_nofault(dst, src, count) strncpy_from_user(dst, src, count)
 #endif
@@ -88,7 +103,7 @@ def patch():
                 f.write(kch)
             print("[+] Added compat defines to kernel_compat.h")
 
-    # 6. Replace any remaining <linux/pgtable.h> with <asm/pgtable.h>
+    # 7. Replace any remaining <linux/pgtable.h> with <asm/pgtable.h>
     for root, dirs, files in os.walk(ksu_dir):
         for file in files:
             if file.endswith(('.c', '.h')):
@@ -100,7 +115,7 @@ def patch():
                     with open(fp, 'w', encoding='utf-8') as f:
                         f.write(content)
 
-    # 7. Patch lsm_hook.c for Linux 4.14 list_head compatibility
+    # 8. Patch lsm_hook.c for Linux 4.14 list_head compatibility
     lsm_c = os.path.join(ksu_dir, 'kernel', 'hook', 'lsm_hook.c')
     if os.path.exists(lsm_c):
         with open(lsm_c, 'r', encoding='utf-8') as f:
@@ -131,14 +146,14 @@ def patch():
             f.write(lc)
         print("[+] Patched lsm_hook.c for Linux 4.14 list_head")
 
-    # 8. Patch file_wrapper.c for Linux 4.14 file_operations compatibility
+    # 9. Patch file_wrapper.c for Linux 4.14 file_operations compatibility
     fw_c = os.path.join(ksu_dir, 'kernel', 'infra', 'file_wrapper.c')
     if os.path.exists(fw_c):
         with open(fw_c, 'r', encoding='utf-8') as f:
             fc = f.read()
 
         if '#include <linux/poll.h>' not in fc:
-            fc = fc.replace('#include <linux/mount.h>', '#include <linux/mount.h>\n#include <linux/poll.h>\n#ifndef __poll_t\ntypedef unsigned int __poll_t;\n#endif')
+            fc = fc.replace('#include <linux/mount.h>', '#include <linux/mount.h>\n#include <linux/poll.h>\n#include <uapi/linux/eventpoll.h>\n#ifndef __poll_t\ntypedef unsigned int __poll_t;\n#endif')
 
         iopoll_target = '''#else
 static int ksu_wrapper_iopoll(struct kiocb *kiocb, bool spin)
@@ -240,6 +255,17 @@ static int ksu_wrapper_fadvise(struct file *fp, loff_t off1, loff_t off2, int fl
         with open(fw_c, 'w', encoding='utf-8') as f:
             f.write(fc)
         print("[+] Patched file_wrapper.c for Linux 4.14 fops")
+
+    # 10. Patch event_queue.h for __poll_t and eventpoll.h
+    eq_h = os.path.join(ksu_dir, 'kernel', 'infra', 'event_queue.h')
+    if os.path.exists(eq_h):
+        with open(eq_h, 'r', encoding='utf-8') as f:
+            eq = f.read()
+        if '#include <uapi/linux/eventpoll.h>' not in eq:
+            eq = eq.replace('#include <linux/poll.h>', '#include <linux/poll.h>\n#include <uapi/linux/eventpoll.h>\n#ifndef __poll_t\ntypedef unsigned int __poll_t;\n#endif')
+            with open(eq_h, 'w', encoding='utf-8') as f:
+                f.write(eq)
+            print("[+] Patched event_queue.h for __poll_t and eventpoll.h")
 
     print("[+] All SukiSU 4.14 patches applied successfully!")
 
