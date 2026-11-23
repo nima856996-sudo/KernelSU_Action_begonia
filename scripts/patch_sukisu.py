@@ -164,6 +164,19 @@ static int ksu_wrapper_iopoll(struct kiocb *kiocb, bool spin)
         fc = fc.replace('p->ops.iopoll = fp->f_op->iopoll ? ksu_wrapper_iopoll : NULL;',
                         '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)\n    p->ops.iopoll = fp->f_op->iopoll ? ksu_wrapper_iopoll : NULL;\n#endif')
 
+        mmap_target = """#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+    p->ops.fop_flags = fp->f_op->fop_flags;
+#else
+    p->ops.mmap_supported_flags = fp->f_op->mmap_supported_flags;
+#endif"""
+        mmap_repl = """#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+    p->ops.fop_flags = fp->f_op->fop_flags;
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
+    p->ops.mmap_supported_flags = fp->f_op->mmap_supported_flags;
+#endif"""
+        if mmap_target in fc:
+            fc = fc.replace(mmap_target, mmap_repl)
+
         remap_target = '''static loff_t ksu_wrapper_remap_file_range(struct file *file_in, loff_t pos_in, struct file *file_out, loff_t pos_out,
                                            loff_t len, unsigned int remap_flags)
 {
