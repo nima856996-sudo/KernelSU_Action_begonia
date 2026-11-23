@@ -131,6 +131,103 @@ def patch():
             f.write(lc)
         print("[+] Patched lsm_hook.c for Linux 4.14 list_head")
 
+    # 8. Patch file_wrapper.c for Linux 4.14 file_operations compatibility
+    fw_c = os.path.join(ksu_dir, 'kernel', 'infra', 'file_wrapper.c')
+    if os.path.exists(fw_c):
+        with open(fw_c, 'r', encoding='utf-8') as f:
+            fc = f.read()
+
+        if '#include <linux/poll.h>' not in fc:
+            fc = fc.replace('#include <linux/mount.h>', '#include <linux/mount.h>\n#include <linux/poll.h>\n#ifndef __poll_t\ntypedef unsigned int __poll_t;\n#endif')
+
+        iopoll_target = '''#else
+static int ksu_wrapper_iopoll(struct kiocb *kiocb, bool spin)
+{
+    struct ksu_file_wrapper *data = kiocb->ki_filp->private_data;
+    struct file *orig = data->orig;
+    kiocb->ki_filp = orig;
+    return orig->f_op->iopoll(kiocb, spin);
+}
+#endif'''
+        iopoll_repl = '''#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)
+static int ksu_wrapper_iopoll(struct kiocb *kiocb, bool spin)
+{
+    struct ksu_file_wrapper *data = kiocb->ki_filp->private_data;
+    struct file *orig = data->orig;
+    kiocb->ki_filp = orig;
+    return orig->f_op->iopoll(kiocb, spin);
+}
+#endif'''
+        if iopoll_target in fc:
+            fc = fc.replace(iopoll_target, iopoll_repl)
+
+        fc = fc.replace('p->ops.iopoll = fp->f_op->iopoll ? ksu_wrapper_iopoll : NULL;',
+                        '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)\n    p->ops.iopoll = fp->f_op->iopoll ? ksu_wrapper_iopoll : NULL;\n#endif')
+
+        remap_target = '''static loff_t ksu_wrapper_remap_file_range(struct file *file_in, loff_t pos_in, struct file *file_out, loff_t pos_out,
+                                           loff_t len, unsigned int remap_flags)
+{
+    if (remap_flags & REMAP_FILE_DEDUP) {
+        struct ksu_file_wrapper *data = file_out->private_data;
+        struct file *orig = data->orig;
+        return orig->f_op->remap_file_range(file_in, pos_in, orig, pos_out, len, remap_flags);
+    } else {
+        struct ksu_file_wrapper *data = file_in->private_data;
+        struct file *orig = data->orig;
+        return orig->f_op->remap_file_range(orig, pos_in, file_out, pos_out, len, remap_flags);
+    }
+}'''
+        remap_repl = '''#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)
+static loff_t ksu_wrapper_remap_file_range(struct file *file_in, loff_t pos_in, struct file *file_out, loff_t pos_out,
+                                           loff_t len, unsigned int remap_flags)
+{
+    if (remap_flags & REMAP_FILE_DEDUP) {
+        struct ksu_file_wrapper *data = file_out->private_data;
+        struct file *orig = data->orig;
+        return orig->f_op->remap_file_range(file_in, pos_in, orig, pos_out, len, remap_flags);
+    } else {
+        struct ksu_file_wrapper *data = file_in->private_data;
+        struct file *orig = data->orig;
+        return orig->f_op->remap_file_range(orig, pos_in, file_out, pos_out, len, remap_flags);
+    }
+}
+#endif'''
+        if remap_target in fc:
+            fc = fc.replace(remap_target, remap_repl)
+
+        fc = fc.replace('p->ops.remap_file_range = fp->f_op->remap_file_range ? ksu_wrapper_remap_file_range : NULL;',
+                        '#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)\n    p->ops.remap_file_range = fp->f_op->remap_file_range ? ksu_wrapper_remap_file_range : NULL;\n#endif')
+
+        fadvise_target = '''static int ksu_wrapper_fadvise(struct file *fp, loff_t off1, loff_t off2, int flags)
+{
+    struct ksu_file_wrapper *data = fp->private_data;
+    struct file *orig = data->orig;
+    if (orig->f_op->fadvise) {
+        return orig->f_op->fadvise(orig, off1, off2, flags);
+    }
+    return -EINVAL;
+}'''
+        fadvise_repl = '''#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
+static int ksu_wrapper_fadvise(struct file *fp, loff_t off1, loff_t off2, int flags)
+{
+    struct ksu_file_wrapper *data = fp->private_data;
+    struct file *orig = data->orig;
+    if (orig->f_op->fadvise) {
+        return orig->f_op->fadvise(orig, off1, off2, flags);
+    }
+    return -EINVAL;
+}
+#endif'''
+        if fadvise_target in fc:
+            fc = fc.replace(fadvise_target, fadvise_repl)
+
+        fc = fc.replace('p->ops.fadvise = fp->f_op->fadvise ? ksu_wrapper_fadvise : NULL;',
+                        '#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)\n    p->ops.fadvise = fp->f_op->fadvise ? ksu_wrapper_fadvise : NULL;\n#endif')
+
+        with open(fw_c, 'w', encoding='utf-8') as f:
+            f.write(fc)
+        print("[+] Patched file_wrapper.c for Linux 4.14 fops")
+
     print("[+] All SukiSU 4.14 patches applied successfully!")
 
 if __name__ == '__main__':
