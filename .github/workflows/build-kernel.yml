@@ -3,205 +3,98 @@ name: Build Kernel
 on:
   workflow_dispatch:
   push:
-    paths:
-      - '.github/workflows/build-kernel.yml'
-      - 'crdroid.config'
+    branches:
+      - begonia-13.0
 
 jobs:
   build:
-    name: Build Kernel by ${{ github.actor }}
+    name: Build Kernel
     runs-on: ubuntu-22.04
-    
     steps:
-    - uses: actions/checkout@v4
-    - name: Setup Configuration
-      run: |
-        echo "KERNEL_SOURCE=https://github.com/ZyCromerZ/begonia" >> $GITHUB_ENV
-        echo "KERNEL_SOURCE_BRANCH=20210205/qk-n" >> $GITHUB_ENV
-        echo "ARCH=arm64" >> $GITHUB_ENV
-        echo "KERNEL_FILE=Image.gz-dtb" >> $GITHUB_ENV
-        echo "ENABLE_KERNELSU=true" >> $GITHUB_ENV
-        echo "DEVICE=begonia" >> $GITHUB_ENV
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Setup build kernel environment
-      run: |
-        echo "BUILD_TIME=$(TZ=Asia/Tehran date "+%Y%m%d%H%M")" >> $GITHUB_ENV
-        sudo apt-get update
-        sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev zip curl make device-tree-compiler python3 gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi
-        mkdir -p $GITHUB_WORKSPACE/kernel_workspace
+      - name: Setup Build Environment
+        run: |
+          echo "BUILD_TIME=$(TZ=Asia/Tehran date "+%Y%m%d%H%M")" >> $GITHUB_ENV
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev zip curl make device-tree-compiler python3 gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi
+          mkdir -p $GITHUB_WORKSPACE/kernel_workspace
 
-    - name: Download AOSP Clang 9.0.4 Toolchain
-      run: |
-        cd $GITHUB_WORKSPACE
-        git clone https://github.com/J0SH1X/clang-r353983 clang --depth=1
+      - name: Download AOSP Clang 9.0.4 Toolchain
+        run: |
+          cd $GITHUB_WORKSPACE
+          git clone https://github.com/J0SH1X/clang-r353983 clang --depth=1
 
-    - name: Download kernel source
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        git clone ${{ env.KERNEL_SOURCE }} -b ${{ env.KERNEL_SOURCE_BRANCH }} android-kernel --depth=1
+      - name: Download Kernel Source
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace
+          git clone https://github.com/ZyCromerZ/begonia -b 20210205/qk-n android-kernel --depth=1
 
-    - name: Setup SukiSU Nova
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        curl -LSs "https://raw.githubusercontent.com/SukiSU-Nova/SukiSU-Nova/main/kernel/setup.sh" | bash -
-        sed -i 's/depends on KPROBES && EXT4_FS/depends on EXT4_FS/g' KernelSU/kernel/Kconfig
-        python3 -c "
-        import os
-        os.makedirs('include/linux', exist_ok=True)
-        with open('include/linux/pgtable.h', 'w') as f:
-            f.write('#ifndef _LINUX_PGTABLE_H\n#define _LINUX_PGTABLE_H\n#include <asm/pgtable.h>\n#endif\n')
+      - name: Setup SukiSU Nova
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Nova/SukiSU-Nova/main/kernel/setup.sh" | bash -
+          python3 $GITHUB_WORKSPACE/scripts/patch_sukisu.py
 
-        with open('KernelSU/kernel/hook/syscall_hook.h', 'r') as f: s = f.read()
-        s = s.replace('#elif defined(__riscv)\ntypedef long (*syscall_fn_t)(const struct pt_regs *);\n#endif', '#elif defined(__riscv)\ntypedef long (*syscall_fn_t)(const struct pt_regs *);\n#else\ntypedef void *syscall_fn_t;\n#endif')
-        with open('KernelSU/kernel/hook/syscall_hook.h', 'w') as f: f.write(s)
-
-        with open('KernelSU/kernel/core/init.c', 'r') as f: lines = [l for l in f.readlines() if 'MODULE_IMPORT_NS' not in l]
-        with open('KernelSU/kernel/core/init.c', 'w') as f: f.writelines(lines)
-
-        compat_code = '''
-#include <linux/version.h>
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
-#include <asm/pgtable.h>
-#ifndef strncpy_from_user_nofault
-#define strncpy_from_user_nofault(dst, src, count) strncpy_from_user(dst, src, count)
-#endif
-#ifndef copy_from_user_nofault
-#define copy_from_user_nofault(dst, src, count) copy_from_user(dst, src, count)
-#endif
-#endif
-'''
-        with open('KernelSU/kernel/include/ksu.h', 'r') as f: ksu_content = f.read()
-        if 'strncpy_from_user_nofault' not in ksu_content:
-            ksu_content = ksu_content.replace('#ifndef __KSU_H_KSU\n#define __KSU_H_KSU', '#ifndef __KSU_H_KSU\n#define __KSU_H_KSU\n' + compat_code)
-            with open('KernelSU/kernel/include/ksu.h', 'w') as f: f.write(ksu_content)
-
-        if os.path.exists('KernelSU/kernel/kernel_compat.h'):
-            with open('KernelSU/kernel/kernel_compat.h', 'r') as f: kc = f.read()
-            if 'copy_from_user_nofault' not in kc:
-                kc = kc.replace('#define __KSU_H_KERNEL_COMPAT', '#define __KSU_H_KERNEL_COMPAT\n' + compat_code)
-                with open('KernelSU/kernel/kernel_compat.h', 'w') as f: f.write(kc)
-
-        for root, dirs, files in os.walk('KernelSU'):
-            for file in files:
-                if file.endswith(('.c', '.h')):
-                    fp = os.path.join(root, file)
-                    with open(fp, 'r', errors='ignore') as f: fc = f.read()
-                    if '<linux/pgtable.h>' in fc:
-                        fc = fc.replace('<linux/pgtable.h>', '<asm/pgtable.h>')
-                        with open(fp, 'w') as f: f.write(fc)
-        "
-        KSU_VERSION=$(cd KernelSU && expr $(/usr/bin/git rev-list --count HEAD 2>/dev/null || echo 100) + 10200)
-        echo "UPLOADNAME=-SukiSU_$KSU_VERSION" >> $GITHUB_ENV
-
-    - name: Setup Configuration for Kernel
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-        export ARCH=arm64
-        export SUBARCH=arm64
-        export KBUILD_COMPILER_STRING="$(clang --version | head -n 1)"
-        export KBUILD_BUILD_HOST=crDroidBuild
-        export KBUILD_BUILD_USER=nobody
-
-        # Copy the exact crDroid extracted defconfig
-        cp $GITHUB_WORKSPACE/crdroid.config arch/arm64/configs/crdroid_defconfig
-
-        make -j$(nproc --all) O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- crdroid_defconfig
-
-        if ! grep -q "CONFIG_KSU=y" out/.config; then
+      - name: Configure Kernel
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          export ARCH=arm64
+          export SUBARCH=arm64
+          cp $GITHUB_WORKSPACE/crdroid.config arch/arm64/configs/crdroid_defconfig
+          make -j$(nproc --all) O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- crdroid_defconfig
+          if ! grep -q "CONFIG_KSU=y" out/.config; then
             echo "CONFIG_KSU=y" >> out/.config
             echo "CONFIG_KSU_MANUAL_SU=y" >> out/.config
             echo "CONFIG_KPM=y" >> out/.config
             echo "CONFIG_KPROBES=y" >> out/.config
             echo "CONFIG_KPROBE_EVENTS=y" >> out/.config
-        fi
+          fi
 
-    - name: Build kernel
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-        export ARCH=arm64
-        export SUBARCH=arm64
-        export KBUILD_COMPILER_STRING="$(clang --version | head -n 1)"
-        export KBUILD_BUILD_HOST=crDroidBuild
-        export KBUILD_BUILD_USER=nobody
-        make -j$(nproc --all) O=out \
+      - name: Build Kernel
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export KBUILD_COMPILER_STRING="$(clang --version | head -n 1)"
+          export KBUILD_BUILD_HOST=crDroidBuild
+          export KBUILD_BUILD_USER=nobody
+          make -j$(nproc --all) O=out \
             ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            KCFLAGS="-w -Wno-int-conversion -Wno-incompatible-pointer-types"
 
-    - name: Check a kernel output files
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        if [ -f android-kernel/out/arch/arm64/boot/Image.gz-dtb ]; then
-            echo "CHECK_FILE_IS_OK=true" >> $GITHUB_ENV
-            echo "Kernel Image.gz-dtb found!"
-        else
-            echo "Kernel output file is empty"
+      - name: Check Output
+        run: |
+          if [ -f $GITHUB_WORKSPACE/kernel_workspace/android-kernel/out/arch/arm64/boot/Image.gz-dtb ]; then
+            echo "Image.gz-dtb found!"
+          else
+            echo "Kernel Image.gz-dtb not found!"
             exit 1
-        fi
+          fi
 
-    - name: Make Anykernel3
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        git clone https://github.com/osm0sis/AnyKernel3
-        cat << 'EOF' > AnyKernel3/anykernel.sh
-### AnyKernel3 Ramdisk Mod Script
-## osm0sis @ xda-developers
+      - name: Package AnyKernel3
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace
+          git clone https://github.com/osm0sis/AnyKernel3
+          cp $GITHUB_WORKSPACE/scripts/anykernel_begonia.sh AnyKernel3/anykernel.sh
+          cp android-kernel/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          rm -rf AnyKernel3/.git* AnyKernel3/README.md
 
-### AnyKernel setup
-# begin properties
-properties() { '
-kernel.string=QuantumKiller-N with SukiSU Nova (crDroid Stock Config)
-do.devicecheck=0
-do.modules=0
-do.systemless=1
-do.cleanup=1
-do.cleanuponabort=0
-device.name1=begonia
-device.name2=begoniain
-supported.versions=
-supported.patchlevels=
-'; } # end properties
+      - name: Upload AnyKernel3 Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: SukiSU-Nova-Kernel-begonia-${{ env.BUILD_TIME }}
+          path: kernel_workspace/AnyKernel3/*
 
-### AnyKernel install
-# begin attributes
-boot_attributes() {
-set_perm_recursive 0 0 755 644 $RAMDISK/*;
-set_perm_recursive 0 0 750 750 $RAMDISK/init* $RAMDISK/sbin;
-} # end attributes
-
-## boot shell variables
-BLOCK=boot;
-IS_SLOT_DEVICE=0;
-RAMDISK_COMPRESSION=auto;
-PATCH_VBMETA_FLAG=auto;
-
-# import functions/variables and setup patching - see for reference (DO NOT REMOVE)
-. tools/ak3-core.sh;
-
-# boot install
-dump_boot;
-
-# write boot
-write_boot;
-## end boot install
-EOF
-        cp android-kernel/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
-        rm -rf AnyKernel3/.git* AnyKernel3/README.md
-
-    - name: Upload AnyKernel3
-      if: env.CHECK_FILE_IS_OK == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: AnyKernel3${{ env.UPLOADNAME }}-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
-        path: kernel_workspace/AnyKernel3/*
-
-    - name: Upload Image.gz-dtb
-      if: env.CHECK_FILE_IS_OK == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: Image.gz-dtb${{ env.UPLOADNAME }}-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
-        path: kernel_workspace/android-kernel/out/arch/arm64/boot/Image.gz-dtb
+      - name: Upload Kernel Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: Image.gz-dtb-${{ env.BUILD_TIME }}
+          path: kernel_workspace/android-kernel/out/arch/arm64/boot/Image.gz-dtb
